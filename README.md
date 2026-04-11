@@ -135,6 +135,16 @@ only the client call needs swapping.
 
 ---
 
+## vs. Claude Managed Agents
+
+Anthropic launched Managed Agents on April 8, 2026.
+It runs your agent on their cloud for $0.08/hour — $58/month 
+before token costs.
+
+heartbeat runs on your machine.
+$0/month. No vendor lock-in. Your data stays local.
+Same KAIROS pattern. Zero infrastructure.
+
 ## Contributing
 
 Open issues for:
@@ -145,3 +155,4 @@ Open issues for:
 ---
 
 *Named after the Greek concept of "the right moment" — καιρός*
+
