@@ -48,29 +48,25 @@ export ANTHROPIC_API_KEY=your_key_here
 ## Run
 
 ```bash
-# Default: 30-second ticks, auto-detects CLAUDE.md or README.md
+# Default: 30-second ticks
 python heartbeat.py
+
+# Show what the agent has learned across sessions
+python heartbeat.py --learn
 
 # Custom interval and context
 python heartbeat.py --interval 60 --context my_project_context.md
-
-# Fast ticks for testing
-python heartbeat.py --interval 10 --dream-interval 300
 ```
 
-## File structure
-
-```
-your-project/
-├── heartbeat.py
+**3. File structure — update the memory line:**
+```markdown
 └── .heartbeat/
     ├── memory/
-    │   └── context.md      ← persistent memory, updated each tick
+    │   └── learnings.jsonl  ← structured learnings, one entry per action
     └── logs/
-        └── 2026-04-11.log  ← append-only daily log
+        └── 2026-04-12.log
 ```
 
----
 
 ## The KAIROS architecture
 
@@ -127,6 +123,8 @@ only the client call needs swapping.
 - [x] autoDream memory consolidation  
 - [x] Append-only daily logs
 - [x] CLAUDE.md / README.md auto-detection
+- [x] Structured JSONL learnings (gstack-compatible schema)
+- [x] `--learn` command to review what the agent observed
 - [ ] Push notifications (phone/desktop)
 - [ ] GitHub webhook subscriptions
 - [ ] OpenAI / Gemini client support
