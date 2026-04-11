@@ -15,6 +15,9 @@ If yes — it acts. If no — it waits.
 
 `heartbeat` implements that pattern as a standalone, model-agnostic daemon you can attach to any project.
 
+> Every other open harness waits for you.  
+> heartbeat doesn't.
+
 ---
 
 ## What it does
