@@ -139,6 +139,8 @@ Rules:
 - Never repeat actions you already took recently (check memory)
 - Keep responses concise — this runs every few seconds
 - If you act, describe what you did in one sentence for the log
+- If repeated errors appear in logs, invoke the triage skill:
+  read skills/triage.md and follow its phases before acting
 
 Respond in JSON:
 {
