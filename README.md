@@ -130,6 +130,20 @@ This is that.
 
 ---
 
+## vs. OpenClaw
+
+OpenClaw 4.11 has the most complete memory loop 
+in open source: capture, structuring, retrieval, 
+portability.
+
+But you still have to trigger it through conversation.
+
+heartbeat doesn't wait for the conversation.
+It runs the loop on its own.
+
+
+---
+
 ## Model support
 
 Works with any Anthropic model. Swap `claude-sonnet-4-20250514` in `heartbeat.py`  
