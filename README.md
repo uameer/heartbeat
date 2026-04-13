@@ -20,26 +20,24 @@ Every N seconds, one question:
 If yes — it acts. If no — it waits.
 
 > Every other open harness waits for you.  
-> heartbeat doesn't
+> heartbeat doesn't.
 
 ---
 
 ## What it does
 
-```
-tick #1  → [WAIT] No open issues or stale files detected
-tick #2  → [WAIT] Tests passing, no action needed
-tick #3  → [ACT]  Found TODO in auth.py from 3 weeks ago — flagged in memory
-tick #4  → [WAIT] Nothing urgent
+- tick #1  → [WAIT] No open issues or stale files detected
+- tick #2  → [WAIT] Tests passing, no action needed
+- tick #3  → [ACT]  Found TODO in auth.py from 3 weeks ago — flagged in memory
+- tick #4  → [WAIT] Nothing urgent
 ...
-[night]  → autoDream: consolidating memory from today's observations
-```
-
+- [night]  → autoDream: consolidating memory from today's observations
 - Runs silently in the background
 - Reads your project context (CLAUDE.md, README.md, or custom file)
 - Decides autonomously whether to act each tick
 - Keeps append-only daily logs — it cannot erase its own history
 - Runs **autoDream** once per day: consolidates memory, removes contradictions, compresses observations
+- Writes structured learning entries after every action — queryable, exportable, yours
 
 ---
 
@@ -55,69 +53,102 @@ export ANTHROPIC_API_KEY=your_key_here
 ## Run
 
 ```bash
-# Default: 30-second ticks
+# Default: 30-second ticks, auto-detects CLAUDE.md or README.md
 python heartbeat.py
 
 # Show what the agent has learned across sessions
 python heartbeat.py --learn
 
-# Custom interval and context
+# Custom interval and context file
 python heartbeat.py --interval 60 --context my_project_context.md
+
+# Fast ticks for testing
+python heartbeat.py --interval 10 --dream-interval 300
 ```
 
-**3. File structure — update the memory line:**
-```markdown
-└── .heartbeat/
-    ├── memory/
-    │   └── learnings.jsonl  ← structured learnings, one entry per action
-    └── logs/
-        └── 2026-04-12.log
+---
+
+## File structure
+
 ```
+your-project/
+├── heartbeat.py             ← the harness (~300 lines)
+├── skills/
+│   └── triage.md            ← error clustering skill
+├── .gitignore
+├── LICENSE
+├── README.md
+└── requirements.txt
+
+# created automatically when heartbeat runs:
+.heartbeat/
+├── memory/
+│   └── learnings.jsonl      ← every action logged as structured entry
+└── logs/
+    └── 2026-04-13.log       ← append-only daily log
+```
+
+`.heartbeat/` is in `.gitignore` — your learnings stay local.  
+`skills/` is public — the methodology is shared, the memory is yours.
+
+---
+
 ## Architecture
 
-Fat skills on top — learnings.jsonl encodes what 
-the agent discovered. Structured, searchable, yours.
+Three layers. Same pattern as Garry Tan's YC framework — arrived at independently.
 
-Thin harness in the middle — heartbeat.py, ~200 lines.
+**Fat skills on top** — `skills/` encodes what the agent knows how to do.
+Structured markdown procedures. Invoke on pattern match.
+
+****Thin harness in the middle** — `heartbeat.py`, ~300 lines.
 JSON in, text out. Read-only by default.
 
-Your project on the bottom — CLAUDE.md, README.md, 
-or any context file. The deterministic foundation.
+**Your project on the bottom** — `CLAUDE.md`, `README.md`, or any context file.
+The deterministic foundation.
 
-Push intelligence up into learnings.
+Push intelligence up into skills.
 Push execution down into your existing project files.
 Keep the harness thin.
 
 Every model improvement automatically improves every tick.
 
+---
+
+## Skills
+
+Built-in skills that trigger automatically:
+
+| Skill | Triggers when | What it does |
+|-------|--------------|--------------|
+| `skills/triage.md` | Same error appears 3+ times | Cluster errors, score severity, write structured learning entries |
+
+Add your own skills as markdown files in `skills/`.
+
+---
 
 ## The KAIROS architecture
 
 From the leaked Claude Code source (512,000 lines, March 31 2026):
 
-```
 KAIROS receives periodic <tick> prompts and decides independently
 whether to act. It has three tools normal Claude Code never sees:
 push notifications, file delivery, and GitHub PR subscriptions.
 At night it runs autoDream — memory consolidation while you sleep.
-```
-
-`heartbeat` implements the core loop:
+heartbeat implements the core loop:
 
 ```
 while True:
-    observe()      ← read project context + memory
-    decide()       ← act or wait?
+    observe()        ← read project context + memory
+    decide()         ← act or wait?
     if acting:
         do_one_thing()
         log_it()
-        update_memory()
+        write_learning()   ← structured JSONL entry
     sleep(interval)
 
 # once per day:
-    autoDream()    ← consolidate memory, compress observations
+    autoDream()      ← consolidate memory, compress observations
 ```
-
 ---
 
 ## Why this exists
@@ -130,26 +161,37 @@ This is that.
 
 ---
 
+## vs. Claude Managed Agents
+
+Anthropic launched Managed Agents on April 8, 2026 — same always-on pattern,
+locked behind their API at $0.08/hour. Your memory on their servers.
+
+heartbeat runs on your machine.
+Zero infrastructure cost beyond API calls.
+Your learnings stay in a file you own, read, and take anywhere.
+
+If Claude gets worse, swap to GPT. Your memory comes with you.
+
+---
+
 ## vs. OpenClaw
 
-OpenClaw 4.11 has the most complete memory loop 
-in open source: capture, structuring, retrieval, 
-portability.
+OpenClaw 4.11 has the most complete memory loop in open source:
+capture, structuring, retrieval, portability.
 
 But you still have to trigger it through conversation.
 
 heartbeat doesn't wait for the conversation.
 It runs the loop on its own.
 
-
 ---
 
 ## Model support
 
-Works with any Anthropic model. Swap `claude-sonnet-4-20250514` in `heartbeat.py`  
+Works with any Anthropic model. Swap `claude-sonnet-4-20250514` in `heartbeat.py`
 for any model you have access to.
 
-OpenAI / Gemini / local model support: PRs welcome — the pattern is model-agnostic,  
+OpenAI / Gemini / local model support: PRs welcome — the pattern is model-agnostic,
 only the client call needs swapping.
 
 ---
@@ -157,11 +199,12 @@ only the client call needs swapping.
 ## Status
 
 - [x] Core heartbeat loop
-- [x] autoDream memory consolidation  
+- [x] autoDream memory consolidation
 - [x] Append-only daily logs
 - [x] CLAUDE.md / README.md auto-detection
 - [x] Structured JSONL learnings (gstack-compatible schema)
 - [x] `--learn` command to review what the agent observed
+- [x] Triage skill — cluster errors, score severity, structured entries
 - [ ] Push notifications (phone/desktop)
 - [ ] GitHub webhook subscriptions
 - [ ] OpenAI / Gemini client support
@@ -172,11 +215,11 @@ only the client call needs swapping.
 ## Contributing
 
 Open issues for:
-- Alternative model client implementations
+- Alternative model client implementations (OpenAI, Gemini, Ollama)
 - Notification backends (Telegram, Slack, desktop)
 - GitHub webhook integration
+- Additional skills
 
 ---
 
 *Named after the Greek concept of "the right moment" — καιρός*
-
