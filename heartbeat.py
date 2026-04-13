@@ -20,6 +20,12 @@ from pathlib import Path
 from typing import Optional
 import anthropic
 
+# ── Provider setup ────────────────────────────────────────────────────────────
+
+PROVIDER = os.getenv("HEARTBEAT_PROVIDER", "anthropic").lower()
+if PROVIDER == "openai":
+    from openai import OpenAI
+
 # ── Logging ──────────────────────────────────────────────────────────────────
 
 LOG_DIR = Path(".heartbeat/logs")
@@ -115,12 +121,20 @@ Merge these into an updated memory file. Rules:
 
 Return ONLY the updated memory content, no preamble."""
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=2000,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response.content[0].text
+    if PROVIDER == "openai":
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.choices[0].message.content
+    else:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text
 
 # ── Tick ──────────────────────────────────────────────────────────────────────
 
@@ -172,13 +186,24 @@ Persistent memory:
 Anything worth doing right now?"""
 
     try:
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=500,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
-        )
-        raw = response.content[0].text.strip()
+        if PROVIDER == "openai":
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                max_tokens=500,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_message},
+                ],
+            )
+            raw = response.choices[0].message.content.strip()
+        else:
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=500,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_message}],
+            )
+            raw = response.content[0].text.strip()
 
         # Parse JSON response
         if raw.startswith("```"):
@@ -238,7 +263,12 @@ def run(
     context_file: Optional[str] = None,
     dream_interval: int = 86400,  # 24 hours
 ):
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    if PROVIDER == "openai":
+        client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        log.info("  provider:       openai")
+    else:
+        client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        log.info("  provider:       anthropic")
 
     project_context = read_project_context(context_file)
     memory = load_memory()
@@ -305,9 +335,14 @@ if __name__ == "__main__":
         show_learnings()
         exit(0)
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("Error: ANTHROPIC_API_KEY environment variable not set")
-        exit(1)
+    if PROVIDER == "openai":
+        if not os.environ.get("OPENAI_API_KEY"):
+            print("Error: OPENAI_API_KEY environment variable not set")
+            exit(1)
+    else:
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            print("Error: ANTHROPIC_API_KEY environment variable not set")
+            exit(1)
 
     run(
         interval=args.interval,

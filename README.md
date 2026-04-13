@@ -48,6 +48,10 @@ git clone https://github.com/YOUR_USERNAME/heartbeat
 cd heartbeat
 pip install anthropic
 export ANTHROPIC_API_KEY=your_key_here
+
+# Optional: use OpenAI instead
+# export HEARTBEAT_PROVIDER=openai
+# export OPENAI_API_KEY=your_key_here
 ```
 
 ## Run
@@ -205,9 +209,10 @@ only the client call needs swapping.
 - [x] Structured JSONL learnings (gstack-compatible schema)
 - [x] `--learn` command to review what the agent observed
 - [x] Triage skill — cluster errors, score severity, structured entries
+- [x] OpenAI client support (`HEARTBEAT_PROVIDER=openai`)
 - [ ] Push notifications (phone/desktop)
 - [ ] GitHub webhook subscriptions
-- [ ] OpenAI / Gemini client support
+- [ ] Gemini / Ollama client support
 - [ ] Web dashboard for log viewing
 
 ---
