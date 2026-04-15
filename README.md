@@ -58,6 +58,14 @@ export ANTHROPIC_API_KEY=your_key_here
 # OR OpenAI
 # export HEARTBEAT_PROVIDER=openai
 # export OPENAI_API_KEY=your_key_here
+
+# OR Gemini
+# export HEARTBEAT_PROVIDER=gemini
+# export GEMINI_API_KEY=your_key_here
+
+# OR Ollama
+# export HEARTBEAT_PROVIDER=ollama
+# ollama pull qwen3.5:9b
 ```
 
 ## Run
@@ -93,6 +101,8 @@ export ANTHROPIC_API_KEY=your_key_here
 # Optional provider/model overrides
 ./scripts/run.sh . --provider openai --model gpt-4o
 ./scripts/run.sh . --provider anthropic --model claude-3-7-sonnet-latest
+./scripts/run.sh . --provider gemini --model gemini-3.1-flash-lite-preview
+./scripts/run.sh . --provider ollama --model qwen3.5:9b
 
 # Optional profile (default: generic)
 ./scripts/run.sh /absolute/path/to/django-project --profile django --interval 60
@@ -237,9 +247,16 @@ It runs the loop on its own.
 
 Set model via env or CLI, no code changes needed:
 
-- `HEARTBEAT_ANTHROPIC_MODEL` (default: `claude-3-7-sonnet-latest`)
-- `HEARTBEAT_OPENAI_MODEL` (default: `gpt-4o`)
-- CLI override: `--model ...`
+| Provider    | Default model                    | Env var                       | API key env var   |
+|-------------|----------------------------------|-------------------------------|-------------------|
+| `anthropic` | `claude-3-7-sonnet-latest`       | `HEARTBEAT_ANTHROPIC_MODEL`   | `ANTHROPIC_API_KEY` |
+| `openai`    | `gpt-4o`                         | `HEARTBEAT_OPENAI_MODEL`      | `OPENAI_API_KEY`  |
+| `gemini`    | `gemini-3.1-flash-lite-preview`  | `HEARTBEAT_GEMINI_MODEL`      | `GEMINI_API_KEY`  |
+| `ollama`    | `qwen2.5:7b`                     | `HEARTBEAT_OLLAMA_MODEL`      | *(not required)*  |
+
+Ollama runs fully locally. Install from [ollama.com](https://ollama.com).
+
+CLI override: `--model ...`
 
 ## Profiles (pluggable signals)
 
@@ -276,9 +293,10 @@ only the client call needs swapping.
 - [x] `--learn` command to review what the agent observed
 - [x] Triage skill — cluster errors, score severity, structured entries
 - [x] OpenAI client support (`HEARTBEAT_PROVIDER=openai`)
+- [x] Gemini client support (`HEARTBEAT_PROVIDER=gemini`)
+- [x] Ollama client support (`HEARTBEAT_PROVIDER=ollama`)
 - [ ] Push notifications (phone/desktop)
 - [ ] GitHub webhook subscriptions
-- [ ] Gemini / Ollama client support
 - [ ] Web dashboard for log viewing
 
 ---
@@ -286,7 +304,6 @@ only the client call needs swapping.
 ## Contributing
 
 Open issues for:
-- Alternative model client implementations (OpenAI, Gemini, Ollama)
 - Notification backends (Telegram, Slack, desktop)
 - GitHub webhook integration
 - Additional skills

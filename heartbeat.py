@@ -28,6 +28,9 @@ from typing import Optional
 PROVIDER = os.getenv("HEARTBEAT_PROVIDER", "anthropic").lower()
 OPENAI_MODEL = os.getenv("HEARTBEAT_OPENAI_MODEL", "gpt-4o")
 ANTHROPIC_MODEL = os.getenv("HEARTBEAT_ANTHROPIC_MODEL", "claude-3-7-sonnet-latest")
+OLLAMA_MODEL = os.getenv("HEARTBEAT_OLLAMA_MODEL", "qwen3.5:9b")
+OLLAMA_BASE_URL = os.getenv("HEARTBEAT_OLLAMA_BASE_URL", "http://localhost:11434")
+GEMINI_MODEL = os.getenv("HEARTBEAT_GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 MAX_SIGNAL_LINES = int(os.getenv("HEARTBEAT_MAX_SIGNAL_LINES", "30"))
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -223,7 +226,7 @@ Merge these into an updated memory file. Rules:
 
 Return ONLY the updated memory content, no preamble."""
 
-    if provider == "openai":
+    if provider in ("openai", "ollama", "gemini"):
         response = client.chat.completions.create(
             model=model,
             max_tokens=2000,
@@ -231,6 +234,7 @@ Return ONLY the updated memory content, no preamble."""
         )
         return response.choices[0].message.content
     else:
+        #anthropic
         response = client.messages.create(
             model=model,
             max_tokens=2000,
@@ -441,7 +445,7 @@ Collected signals:
 Anything worth doing right now?"""
 
     try:
-        if provider == "openai":
+        if provider in ("openai", "ollama", "gemini"):
             response = client.chat.completions.create(
                 model=model,
                 max_tokens=500,
@@ -452,6 +456,7 @@ Anything worth doing right now?"""
             )
             raw = response.choices[0].message.content.strip()
         else:
+            #anthropic
             response = client.messages.create(
                 model=model,
                 max_tokens=500,
@@ -530,6 +535,22 @@ def build_client(provider: str):
             raise ValueError("OPENAI_API_KEY environment variable not set")
         from openai import OpenAI
         return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    
+    if provider == "ollama":
+        from openai import OpenAI
+        return OpenAI(
+            base_url=f"{OLLAMA_BASE_URL}/v1",
+            api_key="ollama",
+        )
+    
+    if provider == "gemini":
+        if not os.environ.get("GEMINI_API_KEY"):
+            raise ValueError("GEMINI_API_KEY environment variable not set")
+        from openai import OpenAI
+        return OpenAI(
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+            api_key=os.environ["GEMINI_API_KEY"],
+        )
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise ValueError("ANTHROPIC_API_KEY environment variable not set")
@@ -541,6 +562,10 @@ def choose_model(provider: str, model_override: Optional[str]) -> str:
         return model_override
     if provider == "openai":
         return OPENAI_MODEL
+    if provider == "ollama":
+        return OLLAMA_MODEL
+    if provider == "gemini":
+        return GEMINI_MODEL
     return ANTHROPIC_MODEL
 
 def load_workspace_config(workspace: Path) -> dict:
@@ -657,7 +682,7 @@ if __name__ == "__main__":
         help="Project directory where .heartbeat data is stored (default: current directory)"
     )
     parser.add_argument(
-        "--provider", type=str, default=None, choices=["anthropic", "openai"],
+        "--provider", type=str, default=None, choices=["anthropic", "openai", "ollama", "gemini"],
         help="Model provider (default: workspace config, HEARTBEAT_PROVIDER, or anthropic)"
     )
     parser.add_argument(
