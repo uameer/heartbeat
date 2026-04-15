@@ -198,6 +198,110 @@ def show_actions(limit: int = 20, as_json: bool = False) -> None:
     for idx, item in enumerate(actions, 1):
         print(f"{idx}. [{item['source']}] {item['text']}")
 
+def show_report() -> None:
+    """Print a weekly summary from learnings.jsonl."""
+    # ── Load all entries ──────────────────────────────────────────────────────
+    if not LEARNINGS_FILE.exists():
+        print("No learnings file found.")
+        return
+    lines = LEARNINGS_FILE.read_text().strip().splitlines()
+    all_entries: list[dict] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            all_entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+    total = len(all_entries)
+    now = datetime.datetime.now()
+    cutoff_7d = now - datetime.timedelta(days=7)
+
+    # ── Act/wait ratio from today's log ───────────────────────────────────────
+    act_count = 0
+    wait_count = 0
+    if log_file.exists():
+        for line in log_file.read_text().splitlines():
+            if "[ACT]" in line:
+                act_count += 1
+            elif "[WAIT]" in line:
+                wait_count += 1
+    total_decisions = act_count + wait_count
+    if total_decisions > 0:
+        act_pct = round(100 * act_count / total_decisions)
+        wait_pct = 100 - act_pct
+        ratio_str = f"{act_count} act / {wait_count} wait  ({act_pct}% act, {wait_pct}% wait)"
+    else:
+        ratio_str = "No decisions logged today"
+
+    # ── Top 3 pitfalls by confidence ──────────────────────────────────────────
+    pitfalls = [e for e in all_entries if e.get("type") == "pitfall"]
+    # Dedup by key — latest wins
+    seen: dict[str, dict] = {}
+    for e in pitfalls:
+        seen[e.get("key", "")] = e
+    top_pitfalls = sorted(seen.values(), key=lambda x: -x.get("confidence", 0))[:3]
+
+    # ── Top 3 patterns by confidence ──────────────────────────────────────────
+    patterns = [e for e in all_entries if e.get("type") == "pattern"]
+    seen2: dict[str, dict] = {}
+    for e in patterns:
+        seen2[e.get("key", "")] = e
+    top_patterns = sorted(seen2.values(), key=lambda x: -x.get("confidence", 0))[:3]
+
+    # ── New learnings in last 7 days ──────────────────────────────────────────
+    recent_entries: list[dict] = []
+    for e in all_entries:
+        try:
+            ts = datetime.datetime.fromisoformat(e["ts"])
+            if ts >= cutoff_7d:
+                recent_entries.append(e)
+        except (KeyError, ValueError):
+            continue
+    new_last_7d = len(recent_entries)
+
+    # ── Compounding rate: avg new learnings per day over last 7 days ──────────
+    daily_counts: dict[str, int] = {}
+    for e in recent_entries:
+        try:
+            day = datetime.datetime.fromisoformat(e["ts"]).date().isoformat()
+            daily_counts[day] = daily_counts.get(day, 0) + 1
+        except (KeyError, ValueError):
+            continue
+    avg_per_day = round(new_last_7d / 7, 1)
+
+    # ── Print ─────────────────────────────────────────────────────────────────
+    print()
+    print("━" * 50)
+    print("  Heartbeat Weekly Summary")
+    print("━" * 50)
+    print()
+    print(f"  Total learning entries : {total}")
+    print()
+    print(f"  Act/wait ratio (today) : {ratio_str}")
+    print()
+    print("  Top 3 pitfalls (by confidence):")
+    if top_pitfalls:
+        for e in top_pitfalls:
+            print(f"    [{e.get('confidence', '?')}/10] {e.get('key', '')}: {e.get('insight', '')}")
+    else:
+        print("    (none recorded)")
+    print()
+    print("  Top 3 patterns (by confidence):")
+    if top_patterns:
+        for e in top_patterns:
+            print(f"    [{e.get('confidence', '?')}/10] {e.get('key', '')}: {e.get('insight', '')}")
+    else:
+        print("    (none recorded)")
+    print()
+    print(f"  New learnings (last 7 days) : {new_last_7d}")
+    print(f"  Compounding rate            : {avg_per_day} new learnings/day")
+    print()
+    print("━" * 50)
+    print()
+
+
 def consolidate_memory(client, current_memory: str, todays_log: str, provider: str, model: str) -> str:
     """
     autoDream: consolidate what was learned today into persistent memory.
@@ -742,6 +846,10 @@ if __name__ == "__main__":
         help="Use minimal system prompt — only act when something is clearly broken"
     )
     parser.add_argument(
+        "--report", action="store_true",
+        help="Print weekly summary from learnings.jsonl and exit"
+    )
+    parser.add_argument(
         "--save-config", action="store_true",
         help="Save current run defaults to <workspace>/.heartbeat/config.json and exit"
     )
@@ -780,6 +888,9 @@ if __name__ == "__main__":
         print(f"Saved config: {path}")
         exit(0)
 
+    if args.report:
+        show_report()
+        exit(0)
     if args.learn:
         show_learnings()
         exit(0)
