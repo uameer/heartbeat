@@ -41,15 +41,21 @@ If yes — it acts. If no — it waits.
 
 ---
 
-## Install
+## Quick start
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/heartbeat
 cd heartbeat
-pip install anthropic
+./scripts/install.sh
+```
+
+Then choose a provider key:
+
+```bash
+# Anthropic (default provider)
 export ANTHROPIC_API_KEY=your_key_here
 
-# Optional: use OpenAI instead
+# OR OpenAI
 # export HEARTBEAT_PROVIDER=openai
 # export OPENAI_API_KEY=your_key_here
 ```
@@ -57,18 +63,55 @@ export ANTHROPIC_API_KEY=your_key_here
 ## Run
 
 ```bash
-# Default: 30-second ticks, auto-detects CLAUDE.md or README.md
-python heartbeat.py
+# Run heartbeat against the current folder (workspace ".")
+./scripts/run.sh . --interval 30
 
 # Show what the agent has learned across sessions
-python heartbeat.py --learn
+./scripts/run.sh . --learn
 
-# Custom interval and context file
-python heartbeat.py --interval 60 --context my_project_context.md
+# Show recent actionable items
+./scripts/run.sh . --actions --actions-limit 20
 
-# Fast ticks for testing
-python heartbeat.py --interval 10 --dream-interval 300
+# JSON output for automation/scripts
+./scripts/run.sh . --actions-json --actions-limit 20
+
+# Run heartbeat for a different project folder
+./scripts/run.sh /absolute/path/to/your-project --interval 60
+
+# Save defaults for this workspace (one-time)
+./scripts/run.sh /absolute/path/to/your-project \
+  --provider anthropic \
+  --model claude-sonnet-4-6 \
+  --profile django \
+  --run-checks \
+  --interval 120 \
+  --save-config
+
+# After saving config, this is enough
+./scripts/run.sh /absolute/path/to/your-project
+
+# Optional provider/model overrides
+./scripts/run.sh . --provider openai --model gpt-4o
+./scripts/run.sh . --provider anthropic --model claude-3-7-sonnet-latest
+
+# Optional profile (default: generic)
+./scripts/run.sh /absolute/path/to/django-project --profile django --interval 60
+
+# Optional deeper checks (django profile)
+./scripts/run.sh /absolute/path/to/django-project --profile django --run-checks --interval 120
+
+# Optional context file
+./scripts/run.sh . --context my_project_context.md
 ```
+
+All logs/memory are stored inside the target workspace:
+`.heartbeat/logs/` and `.heartbeat/memory/learnings.jsonl`.
+Workspace defaults are stored in `.heartbeat/config.json`.
+
+## Python version
+
+Use Python 3.11 or 3.12.
+Python 3.14 is currently blocked by dependency ABI issues (`pydantic_core`).
 
 ---
 
@@ -192,8 +235,31 @@ It runs the loop on its own.
 
 ## Model support
 
-Works with any Anthropic model. Swap `claude-sonnet-4-20250514` in `heartbeat.py`
-for any model you have access to.
+Set model via env or CLI, no code changes needed:
+
+- `HEARTBEAT_ANTHROPIC_MODEL` (default: `claude-3-7-sonnet-latest`)
+- `HEARTBEAT_OPENAI_MODEL` (default: `gpt-4o`)
+- CLI override: `--model ...`
+
+## Profiles (pluggable signals)
+
+Heartbeat keeps the harness generic and uses optional profiles for deeper signals:
+
+- `generic` (default): git status, TODO/FIXME/HACK hits, stale tracked files
+- `django`: generic signals + Django markers (pytest `lastfailed`, recent migrations)
+  - optional `--run-checks`: runs `python manage.py check --deploy` and `pytest -q --maxfail=3`
+
+Example:
+
+```bash
+./scripts/run.sh /Users/you/your-django-repo --profile django --interval 60
+```
+
+Signal volume can be tuned with:
+
+```bash
+export HEARTBEAT_MAX_SIGNAL_LINES=50
+```
 
 OpenAI / Gemini / local model support: PRs welcome — the pattern is model-agnostic,
 only the client call needs swapping.

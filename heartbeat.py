@@ -11,44 +11,58 @@ If yes — it acts. If no — it waits.
 """
 
 import os
+import sys
 import time
 import json
 import logging
 import argparse
 import datetime
+import subprocess
+import re
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Optional
-import anthropic
 
 # ── Provider setup ────────────────────────────────────────────────────────────
 
 PROVIDER = os.getenv("HEARTBEAT_PROVIDER", "anthropic").lower()
-if PROVIDER == "openai":
-    from openai import OpenAI
+OPENAI_MODEL = os.getenv("HEARTBEAT_OPENAI_MODEL", "gpt-4o")
+ANTHROPIC_MODEL = os.getenv("HEARTBEAT_ANTHROPIC_MODEL", "claude-3-7-sonnet-latest")
+MAX_SIGNAL_LINES = int(os.getenv("HEARTBEAT_MAX_SIGNAL_LINES", "30"))
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 
-LOG_DIR = Path(".heartbeat/logs")
-LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_DIR: Path
+MEMORY_DIR: Path
+LEARNINGS_FILE: Path
+log_file: Path
 
-today = datetime.date.today().isoformat()
-log_file = LOG_DIR / f"{today}.log"
+def configure_workspace(workspace: Path) -> None:
+    """Initialize workspace-local paths for logs and memory."""
+    global LOG_DIR, MEMORY_DIR, LEARNINGS_FILE, log_file
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(log_file),          # append-only daily log
-        logging.StreamHandler(),                 # terminal output
-    ],
-)
+    root = workspace / ".heartbeat"
+    LOG_DIR = root / "logs"
+    MEMORY_DIR = root / "memory"
+    LEARNINGS_FILE = MEMORY_DIR / "learnings.jsonl"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    today = datetime.date.today().isoformat()
+    log_file = LOG_DIR / f"{today}.log"
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler(log_file),      # append-only daily log
+            logging.StreamHandler(),            # terminal output
+        ],
+        force=True,
+    )
+
 log = logging.getLogger("heartbeat")
 
 # ── Memory ────────────────────────────────────────────────────────────────────
-
-MEMORY_DIR = Path(".heartbeat/memory")
-MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-LEARNINGS_FILE = MEMORY_DIR / "learnings.jsonl"
 
 def write_learning(type: str, key: str, insight: str, confidence: int, source: str = "heartbeat") -> None:
     """Append a structured learning entry — same schema as gstack /learn."""
@@ -62,6 +76,23 @@ def write_learning(type: str, key: str, insight: str, confidence: int, source: s
     }
     with open(LEARNINGS_FILE, "a") as f:
         f.write(json.dumps(entry) + "\n")
+
+def recent_learning_entries(limit: int = 20) -> list[dict]:
+    """Return recent learning entries (latest first)."""
+    if not LEARNINGS_FILE.exists():
+        return []
+    lines = LEARNINGS_FILE.read_text().strip().splitlines()
+    if not lines:
+        return []
+    parsed = []
+    for line in lines[-limit:]:
+        if not line.strip():
+            continue
+        try:
+            parsed.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return list(reversed(parsed))
 
 def load_memory() -> str:
     """Load learnings as readable context for the next tick."""
@@ -93,7 +124,78 @@ def show_learnings() -> None:
         for e in sorted(items, key=lambda x: -x["confidence"]):
             print(f"  [{e['confidence']}/10] {e['key']}: {e['insight']}")
 
-def consolidate_memory(client, current_memory: str, todays_log: str) -> str:
+def get_actions(limit: int = 20) -> list[dict]:
+    """Return recent actionable items from learnings and today's log."""
+    def normalize_action_text(text: str) -> str:
+        t = text.lower().strip()
+        t = re.sub(r"\[tool\.pytest\.ini_options\]", "tool.pytest.ini_options", t)
+        t = re.sub(r"\b(read|inspect|check|review)\b", "inspect", t)
+        t = re.sub(r"\b(section|addopts section)\b", "addopts", t)
+        t = re.sub(r"\b(modified file|exact|obvious|may be|could be)\b", " ", t)
+        t = re.sub(r"\b(causing|cause)\b", " ", t)
+        t = re.sub(r"\b(pytest startup error|cached test failure)\b", "test failure", t)
+        t = re.sub(r"\b(broken imports|syntax errors|todo/fixme items)\b", "code issues", t)
+        t = re.sub(r"\b(the|a|an|to|for|of|and)\b", " ", t)
+        t = re.sub(r"[^a-z0-9._/\-\s]", " ", t)
+        t = re.sub(r"\s+", " ", t).strip()
+        return t
+
+    def similar(a: str, b: str) -> bool:
+        if not a or not b:
+            return False
+        if a == b:
+            return True
+        return SequenceMatcher(None, a, b).ratio() >= 0.88
+
+    items: list[tuple[str, str]] = []  # (source, text)
+
+    for e in recent_learning_entries(limit=200):
+        insight = (e.get("insight") or "").strip()
+        if insight:
+            items.append(("learning", insight))
+
+    if log_file.exists():
+        try:
+            for line in reversed(log_file.read_text().splitlines()):
+                if "[ACT]" in line:
+                    action = line.split("[ACT]", 1)[1].strip()
+                    if action:
+                        items.append(("log", action))
+                if len(items) >= 300:
+                    break
+        except Exception:
+            pass
+
+    deduped: list[tuple[str, str]] = []
+    seen_normalized: list[str] = []
+    for source, text in items:
+        normalized = normalize_action_text(text)
+        if not normalized:
+            continue
+        if any(similar(normalized, s) for s in seen_normalized):
+            continue
+        seen_normalized.append(normalized)
+        deduped.append((source, text))
+        if len(deduped) >= limit:
+            break
+
+    return [{"source": source, "text": text} for source, text in deduped]
+
+def show_actions(limit: int = 20, as_json: bool = False) -> None:
+    actions = get_actions(limit=limit)
+    if as_json:
+        print(json.dumps(actions, indent=2))
+        return
+
+    if not actions:
+        print("No actionable items yet.")
+        return
+
+    print("Recent actionable items:")
+    for idx, item in enumerate(actions, 1):
+        print(f"{idx}. [{item['source']}] {item['text']}")
+
+def consolidate_memory(client, current_memory: str, todays_log: str, provider: str, model: str) -> str:
     """
     autoDream: consolidate what was learned today into persistent memory.
     Runs once per day. Merges observations, removes contradictions,
@@ -121,16 +223,16 @@ Merge these into an updated memory file. Rules:
 
 Return ONLY the updated memory content, no preamble."""
 
-    if PROVIDER == "openai":
+    if provider == "openai":
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=model,
             max_tokens=2000,
             messages=[{"role": "user", "content": prompt}],
         )
         return response.choices[0].message.content
     else:
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=model,
             max_tokens=2000,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -155,6 +257,9 @@ Rules:
 - If you act, describe what you did in one sentence for the log
 - If repeated errors appear in logs, invoke the triage skill:
   read skills/triage.md and follow its phases before acting
+- Prefer concrete runtime signals over generic assumptions
+- If your previous action was "read/inspect file X", do not repeat it on the next tick.
+  Propose a different concrete next step or wait.
 
 Respond in JSON:
 {
@@ -167,7 +272,152 @@ Respond in JSON:
   "memory_update": "any new insight to remember (optional)"
 }"""
 
-def tick(client, project_context: str, memory: str, tick_number: int) -> Optional[str]:
+def run_cmd(cmd: list[str], cwd: Path, timeout: int = 5) -> str:
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        return (result.stdout or result.stderr).strip()
+    except Exception as e:
+        return f"(command failed: {' '.join(cmd)}: {e})"
+
+def collect_generic_signals(workspace: Path) -> str:
+    sections: list[str] = []
+
+    git_status = run_cmd(["git", "status", "--short"], cwd=workspace)
+    if git_status:
+        lines = git_status.splitlines()[:MAX_SIGNAL_LINES]
+        sections.append(f"Git status (top {MAX_SIGNAL_LINES}):\n" + "\n".join(lines))
+
+    todos = run_cmd(
+        [
+            "rg",
+            "-n",
+            "--max-count",
+            str(MAX_SIGNAL_LINES),
+            "--glob",
+            "!.git/*",
+            "--glob",
+            "!.venv/*",
+            "--glob",
+            "!.heartbeat/*",
+            "(TODO|FIXME|HACK|XXX)",
+            ".",
+        ],
+        cwd=workspace,
+    )
+    if todos and "No files were searched" not in todos:
+        sections.append(
+            f"Repo TODO/FIXME/HACK hits (top {MAX_SIGNAL_LINES}):\n"
+            + "\n".join(todos.splitlines()[:MAX_SIGNAL_LINES])
+        )
+
+    tracked = run_cmd(["git", "ls-files"], cwd=workspace)
+    stale: list[tuple[float, str]] = []
+    if tracked and not tracked.startswith("(command failed"):
+        cutoff = datetime.datetime.now().timestamp() - (90 * 24 * 60 * 60)
+        for rel in tracked.splitlines():
+            p = workspace / rel
+            if not p.exists() or not p.is_file():
+                continue
+            try:
+                mtime = p.stat().st_mtime
+                if mtime < cutoff:
+                    stale.append((mtime, rel))
+            except OSError:
+                continue
+        if stale:
+            stale.sort(key=lambda x: x[0])
+            sample = [f"- {rel}" for _, rel in stale[:MAX_SIGNAL_LINES]]
+            sections.append(
+                f"Tracked files not modified in 90+ days (showing {min(len(stale), MAX_SIGNAL_LINES)} of {len(stale)}):\n"
+                + "\n".join(sample)
+            )
+
+    if not sections:
+        return "No concrete repo signals detected."
+    return "\n\n".join(sections)
+
+def collect_django_signals(workspace: Path, run_checks: bool = False) -> str:
+    sections: list[str] = []
+    manage_py = workspace / "manage.py"
+    if not manage_py.exists():
+        return "No Django markers found (manage.py missing)."
+
+    sections.append("Django project marker detected: manage.py present.")
+
+    pytest_lastfailed = workspace / ".pytest_cache" / "v" / "cache" / "lastfailed"
+    if pytest_lastfailed.exists():
+        try:
+            data = json.loads(pytest_lastfailed.read_text())
+            if isinstance(data, dict) and data:
+                keys = list(data.keys())[:20]
+                sections.append(
+                    f"Recent pytest failures from cache ({len(data)} total, showing up to {MAX_SIGNAL_LINES}):\n"
+                    + "\n".join(f"- {k}" for k in keys[:MAX_SIGNAL_LINES])
+                )
+        except Exception:
+            pass
+
+    migration_files = list(workspace.glob("**/migrations/*.py"))
+    recent_migrations = sorted(
+        [p for p in migration_files if p.name != "__init__.py"],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )[:10]
+    if recent_migrations:
+        sections.append(
+            f"Recent migration files (top {MAX_SIGNAL_LINES}):\n"
+            + "\n".join(
+                f"- {p.relative_to(workspace)}" for p in recent_migrations[:MAX_SIGNAL_LINES]
+            )
+        )
+
+    if run_checks:
+        deploy_check = run_cmd(
+            ["python", "manage.py", "check", "--deploy"],
+            cwd=workspace,
+            timeout=30,
+        )
+        if deploy_check:
+            sections.append(
+                "Django deploy check output (truncated):\n"
+                + "\n".join(deploy_check.splitlines()[:MAX_SIGNAL_LINES])
+            )
+
+        pytest_quick = run_cmd(
+            ["pytest", "-q", "--maxfail=3"],
+            cwd=workspace,
+            timeout=90,
+        )
+        if pytest_quick:
+            sections.append(
+                "Pytest quick output (truncated):\n"
+                + "\n".join(pytest_quick.splitlines()[:MAX_SIGNAL_LINES])
+            )
+
+    return "\n\n".join(sections)
+
+def collect_signals(workspace: Path, profile: str, run_checks: bool = False) -> str:
+    sections = [f"Profile: {profile}", collect_generic_signals(workspace)]
+    if profile == "django":
+        sections.append(collect_django_signals(workspace, run_checks=run_checks))
+    return "\n\n".join([s for s in sections if s])
+
+def tick(
+    client,
+    project_context: str,
+    memory: str,
+    tick_number: int,
+    provider: str,
+    model: str,
+    signals: str,
+) -> Optional[str]:
     """
     One heartbeat. Returns a memory update string if the agent acted.
     """
@@ -183,12 +433,17 @@ Persistent memory:
 {memory or "(empty — first run)"}
 </memory>
 
+Collected signals:
+<signals>
+{signals}
+</signals>
+
 Anything worth doing right now?"""
 
     try:
-        if PROVIDER == "openai":
+        if provider == "openai":
             response = client.chat.completions.create(
-                model="gpt-4o",
+                model=model,
                 max_tokens=500,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
@@ -198,7 +453,7 @@ Anything worth doing right now?"""
             raw = response.choices[0].message.content.strip()
         else:
             response = client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=model,
                 max_tokens=500,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_message}],
@@ -218,6 +473,16 @@ Anything worth doing right now?"""
         memory_update = result.get("memory_update", "")
 
         if decision == "act":
+            # Prevent loops: if the same action was already logged recently, downgrade to WAIT.
+            normalized_action = " ".join(action.lower().split())
+            recent_actions = {
+                " ".join((e.get("insight", "") or "").lower().split())
+                for e in recent_learning_entries(limit=10)
+            }
+            if normalized_action and normalized_action in recent_actions:
+                log.info(f"[WAIT] Repeated recent action suppressed: {action}")
+                return None
+
             log.info(f"[ACT] {action}")
             learning_key = result.get("learning_key", "observation")
             learning_type = result.get("learning_type", "observation")
@@ -243,34 +508,80 @@ Anything worth doing right now?"""
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
-def read_project_context(context_file: Optional[str]) -> str:
+def read_project_context(context_file: Optional[str], workspace: Path) -> str:
     """Load project context from file or auto-detect CLAUDE.md / README.md."""
     candidates = [
-        context_file,
-        "CLAUDE.md",
-        "README.md",
-        ".heartbeat/context.md",
+        Path(context_file) if context_file else None,
+        workspace / "CLAUDE.md",
+        workspace / "README.md",
+        workspace / ".heartbeat/context.md",
     ]
     for path in candidates:
-        if path and Path(path).exists():
-            content = Path(path).read_text()
+        if path and path.exists():
+            content = path.read_text()
             log.info(f"Loaded context from {path}")
             return content[:3000]  # cap at 3K chars
     return "No project context found. Monitor for general activity."
+
+def build_client(provider: str):
+    """Lazy import provider client to avoid unnecessary import failures."""
+    if provider == "openai":
+        if not os.environ.get("OPENAI_API_KEY"):
+            raise ValueError("OPENAI_API_KEY environment variable not set")
+        from openai import OpenAI
+        return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise ValueError("ANTHROPIC_API_KEY environment variable not set")
+    import anthropic
+    return anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+def choose_model(provider: str, model_override: Optional[str]) -> str:
+    if model_override:
+        return model_override
+    if provider == "openai":
+        return OPENAI_MODEL
+    return ANTHROPIC_MODEL
+
+def load_workspace_config(workspace: Path) -> dict:
+    """Load optional workspace defaults from .heartbeat/config.json."""
+    config_path = workspace / ".heartbeat" / "config.json"
+    if not config_path.exists():
+        return {}
+    try:
+        data = json.loads(config_path.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        log.warning(f"Invalid config file: {config_path}")
+        return {}
+
+def write_workspace_config(workspace: Path, config: dict) -> Path:
+    config_path = workspace / ".heartbeat" / "config.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+    return config_path
 
 def run(
     interval: int = 30,
     context_file: Optional[str] = None,
     dream_interval: int = 86400,  # 24 hours
+    provider: str = PROVIDER,
+    model: Optional[str] = None,
+    workspace: Optional[Path] = None,
+    profile: str = "generic",
+    run_checks: bool = False,
 ):
-    if PROVIDER == "openai":
-        client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-        log.info("  provider:       openai")
-    else:
-        client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-        log.info("  provider:       anthropic")
+    workspace = workspace or Path.cwd()
+    configure_workspace(workspace)
+    selected_provider = provider.lower()
+    selected_model = choose_model(selected_provider, model)
+    client = build_client(selected_provider)
+    log.info(f"  provider:       {selected_provider}")
+    log.info(f"  model:          {selected_model}")
+    log.info(f"  profile:        {profile}")
+    log.info(f"  run_checks:     {run_checks}")
 
-    project_context = read_project_context(context_file)
+    project_context = read_project_context(context_file, workspace)
     memory = load_memory()
 
     log.info("heartbeat started")
@@ -288,7 +599,16 @@ def run(
         while True:
             tick_number += 1
             memory = load_memory()
-            update = tick(client, project_context, memory, tick_number)
+            signals = collect_signals(workspace, profile, run_checks=run_checks)
+            update = tick(
+                client,
+                project_context,
+                memory,
+                tick_number,
+                selected_provider,
+                selected_model,
+                signals,
+            )
             if update:
                 memory_updates.append(update)
 
@@ -296,7 +616,9 @@ def run(
             now = time.time()
             if now - last_dream >= dream_interval and memory_updates:
                 todays_log = log_file.read_text() if log_file.exists() else ""
-                consolidated = consolidate_memory(client, load_memory(), todays_log)
+                consolidated = consolidate_memory(
+                    client, load_memory(), todays_log, selected_provider, selected_model
+                )
                 write_learning("observation", "autodream-summary", consolidated[:200], 7, "autodream")
                 memory_updates.clear()
                 last_dream = now
@@ -310,42 +632,123 @@ def run(
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    if sys.version_info >= (3, 14):
+        print("Error: Python 3.14 is not supported yet by some dependencies.")
+        print("Use Python 3.11 or 3.12 to run heartbeat.")
+        exit(1)
+
     parser = argparse.ArgumentParser(
         description="heartbeat — the KAIROS pattern, open and model-agnostic"
     )
     parser.add_argument(
-        "--interval", type=int, default=30,
-        help="Seconds between heartbeats (default: 30)"
+        "--interval", type=int, default=None,
+        help="Seconds between heartbeats (default: 30 or workspace config)"
     )
     parser.add_argument(
         "--context", type=str, default=None,
         help="Path to project context file (default: auto-detect CLAUDE.md/README.md)"
     )
     parser.add_argument(
-        "--dream-interval", type=int, default=86400,
-        help="Seconds between memory consolidations (default: 86400 = 24h)"
+        "--dream-interval", type=int, default=None,
+        help="Seconds between memory consolidations (default: 86400 or workspace config)"
+    )
+    parser.add_argument(
+        "--workspace", type=str, default=".",
+        help="Project directory where .heartbeat data is stored (default: current directory)"
+    )
+    parser.add_argument(
+        "--provider", type=str, default=None, choices=["anthropic", "openai"],
+        help="Model provider (default: workspace config, HEARTBEAT_PROVIDER, or anthropic)"
+    )
+    parser.add_argument(
+        "--model", type=str, default=None,
+        help="Model name override (default: workspace config or HEARTBEAT_*_MODEL env var)"
+    )
+    parser.add_argument(
+        "--profile", type=str, default=None, choices=["generic", "django"],
+        help="Signal collector profile (default: workspace config or generic)"
+    )
+    parser.add_argument(
+        "--run-checks", dest="run_checks", action="store_true", default=None,
+        help="Enable optional profile-specific commands each tick"
+    )
+    parser.add_argument(
+        "--no-run-checks", dest="run_checks", action="store_false", default=None,
+        help="Disable optional profile-specific commands each tick"
     )
     parser.add_argument(
         "--learn", action="store_true",
         help="Show all learnings grouped by type and exit"
     )
+    parser.add_argument(
+        "--actions", action="store_true",
+        help="Show recent actionable items and exit"
+    )
+    parser.add_argument(
+        "--actions-json", action="store_true",
+        help="Show recent actionable items as JSON and exit"
+    )
+    parser.add_argument(
+        "--actions-limit", type=int, default=20,
+        help="Maximum number of actionable items to show with --actions (default: 20)"
+    )
+    parser.add_argument(
+        "--save-config", action="store_true",
+        help="Save current run defaults to <workspace>/.heartbeat/config.json and exit"
+    )
     args = parser.parse_args()
+
+    workspace = Path(args.workspace).resolve()
+    configure_workspace(workspace)
+    workspace_config = load_workspace_config(workspace)
+
+    interval = args.interval if args.interval is not None else int(workspace_config.get("interval", 30))
+    dream_interval = (
+        args.dream_interval
+        if args.dream_interval is not None
+        else int(workspace_config.get("dream_interval", 86400))
+    )
+    provider = args.provider or workspace_config.get("provider", PROVIDER)
+    profile = args.profile or workspace_config.get("profile", "generic")
+    model = args.model or workspace_config.get("model")
+    run_checks = (
+        args.run_checks
+        if args.run_checks is not None
+        else bool(workspace_config.get("run_checks", False))
+    )
+
+    if args.save_config:
+        config_to_save = {
+            "interval": interval,
+            "dream_interval": dream_interval,
+            "provider": provider,
+            "profile": profile,
+            "run_checks": run_checks,
+        }
+        if model:
+            config_to_save["model"] = model
+        path = write_workspace_config(workspace, config_to_save)
+        print(f"Saved config: {path}")
+        exit(0)
 
     if args.learn:
         show_learnings()
         exit(0)
+    if args.actions or args.actions_json:
+        show_actions(limit=max(args.actions_limit, 1), as_json=args.actions_json)
+        exit(0)
 
-    if PROVIDER == "openai":
-        if not os.environ.get("OPENAI_API_KEY"):
-            print("Error: OPENAI_API_KEY environment variable not set")
-            exit(1)
-    else:
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            print("Error: ANTHROPIC_API_KEY environment variable not set")
-            exit(1)
-
-    run(
-        interval=args.interval,
-        context_file=args.context,
-        dream_interval=args.dream_interval,
-    )
+    try:
+        run(
+            interval=interval,
+            context_file=args.context,
+            dream_interval=dream_interval,
+            provider=provider,
+            model=model,
+            workspace=workspace,
+            profile=profile,
+            run_checks=run_checks,
+        )
+    except ValueError as e:
+        print(f"Error: {e}")
+        exit(1)
