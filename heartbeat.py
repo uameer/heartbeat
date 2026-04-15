@@ -117,6 +117,7 @@ def tick(
     model: str,
     signals: str,
     system_prompt: str = SYSTEM_PROMPT,
+    dry_run: bool = False,
 ) -> Optional[str]:
     """One heartbeat. Returns a memory update string if the agent acted."""
     user_message = f"""Tick #{tick_number} — {datetime.datetime.now().isoformat()}
@@ -177,6 +178,10 @@ Anything worth doing right now?"""
             }
             if normalized_action and normalized_action in recent_actions:
                 log.info(f"[WAIT] Repeated recent action suppressed: {action}")
+                return None
+
+            if dry_run:
+                log.info(f"[DRY-RUN] Would act: {action}")
                 return None
 
             log.info(f"[ACT] {action}")
@@ -251,6 +256,7 @@ def run(
     profile: str = "generic",
     run_checks: bool = False,
     lean: bool = False,
+    dry_run: bool = False,
 ):
     workspace = workspace or Path.cwd()
     configure_workspace(workspace)
@@ -263,6 +269,7 @@ def run(
     log.info(f"  profile:        {profile}")
     log.info(f"  run_checks:     {run_checks}")
     log.info(f"  lean:           {lean}")
+    log.info(f"  dry_run:        {dry_run}")
 
     project_context = read_project_context(context_file, workspace)
     memory = load_memory()
@@ -292,6 +299,7 @@ def run(
                 selected_model,
                 signals,
                 system_prompt=system_prompt,
+                dry_run=dry_run,
             )
             if update:
                 memory_updates.append(update)
@@ -382,6 +390,10 @@ if __name__ == "__main__":
         help="Use minimal system prompt — only act when something is clearly broken"
     )
     parser.add_argument(
+        "--dry-run", dest="dry_run", action="store_true", default=False,
+        help="Decide without executing — logs what agent would do"
+    )
+    parser.add_argument(
         "--report", action="store_true",
         help="Print weekly summary from learnings.jsonl and exit"
     )
@@ -445,6 +457,7 @@ if __name__ == "__main__":
             profile=profile,
             run_checks=run_checks,
             lean=args.lean,
+            dry_run=args.dry_run,
         )
     except ValueError as e:
         print(f"Error: {e}")
