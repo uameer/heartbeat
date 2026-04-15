@@ -276,6 +276,21 @@ Respond in JSON:
   "memory_update": "any new insight to remember (optional)"
 }"""
 
+SYSTEM_PROMPT_LEAN = """You are a minimal background agent on a heartbeat loop.
+
+Only act when something is clearly broken or blocked. Default to waiting.
+
+Respond in JSON:
+{
+  "decision": "act" | "wait",
+  "reasoning": "one sentence",
+  "action_taken": "description of what you did (if acting)",
+  "learning_type": "pattern" | "pitfall" | "observation" | "architecture",
+  "learning_key": "2-5-word-kebab-case-key",
+  "confidence": 1-10,
+  "memory_update": "any new insight to remember (optional)"
+}"""
+
 def run_cmd(cmd: list[str], cwd: Path, timeout: int = 5) -> str:
     try:
         result = subprocess.run(
@@ -421,6 +436,7 @@ def tick(
     provider: str,
     model: str,
     signals: str,
+    system_prompt: str = SYSTEM_PROMPT,
 ) -> Optional[str]:
     """
     One heartbeat. Returns a memory update string if the agent acted.
@@ -450,7 +466,7 @@ Anything worth doing right now?"""
                 model=model,
                 max_tokens=500,
                 messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message},
                 ],
             )
@@ -460,7 +476,7 @@ Anything worth doing right now?"""
             response = client.messages.create(
                 model=model,
                 max_tokens=500,
-                system=SYSTEM_PROMPT,
+                system=system_prompt,
                 messages=[{"role": "user", "content": user_message}],
             )
             raw = response.content[0].text.strip()
@@ -595,16 +611,19 @@ def run(
     workspace: Optional[Path] = None,
     profile: str = "generic",
     run_checks: bool = False,
+    lean: bool = False,
 ):
     workspace = workspace or Path.cwd()
     configure_workspace(workspace)
     selected_provider = provider.lower()
     selected_model = choose_model(selected_provider, model)
     client = build_client(selected_provider)
+    system_prompt = SYSTEM_PROMPT_LEAN if lean else SYSTEM_PROMPT
     log.info(f"  provider:       {selected_provider}")
     log.info(f"  model:          {selected_model}")
     log.info(f"  profile:        {profile}")
     log.info(f"  run_checks:     {run_checks}")
+    log.info(f"  lean:           {lean}")
 
     project_context = read_project_context(context_file, workspace)
     memory = load_memory()
@@ -633,6 +652,7 @@ def run(
                 selected_provider,
                 selected_model,
                 signals,
+                system_prompt=system_prompt,
             )
             if update:
                 memory_updates.append(update)
@@ -718,6 +738,10 @@ if __name__ == "__main__":
         help="Maximum number of actionable items to show with --actions (default: 20)"
     )
     parser.add_argument(
+        "--lean", action="store_true", default=False,
+        help="Use minimal system prompt — only act when something is clearly broken"
+    )
+    parser.add_argument(
         "--save-config", action="store_true",
         help="Save current run defaults to <workspace>/.heartbeat/config.json and exit"
     )
@@ -773,6 +797,7 @@ if __name__ == "__main__":
             workspace=workspace,
             profile=profile,
             run_checks=run_checks,
+            lean=args.lean,
         )
     except ValueError as e:
         print(f"Error: {e}")
