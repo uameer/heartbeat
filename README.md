@@ -243,6 +243,21 @@ It runs the loop on its own.
 
 ---
 
+## vs. Claude Code Routines
+
+Anthropic launched Routines on April 14 2026 —
+scheduled autonomous agent runs on their cloud.
+
+Same pattern. Their infrastructure. Claude only.
+Your observations on their servers.
+
+heartbeat runs on your machine.
+Works with any model.
+Builds structured memory across every tick.
+The agent compounds. Routines reset.
+
+---
+
 ## Model support
 
 Set model via env or CLI, no code changes needed:
