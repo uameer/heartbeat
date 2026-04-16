@@ -319,6 +319,26 @@ only the client call needs swapping.
 
 ---
 
+## Security model
+
+heartbeat's autonomous core — `tick()` and `run()` — is ~100 lines. That's the part that makes decisions.
+
+The full codebase splits across 4 files:
+- `heartbeat.py` — core loop + CLI (~450 lines)
+- `heartbeat_memory.py` — learning storage
+- `heartbeat_signals.py` — project signal collection
+- `heartbeat_providers.py` — model API clients
+
+heartbeat reads files from your project directory.
+It does not write to files by default.
+It does not make network requests except to the model API.
+It does not execute shell commands.
+
+Read `tick()` and `run()` before you run it.
+That's the security model.
+
+---
+
 ## Contributing
 
 Open issues for:
