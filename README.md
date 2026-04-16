@@ -310,6 +310,9 @@ only the client call needs swapping.
 - [x] OpenAI client support (`HEARTBEAT_PROVIDER=openai`)
 - [x] Gemini client support (`HEARTBEAT_PROVIDER=gemini`)
 - [x] Ollama client support (`HEARTBEAT_PROVIDER=ollama`)
+- [x] --lean mode for token-efficient ticks
+- [x] --report weekly summary command
+- [x] --dry-run mode
 - [ ] Push notifications (phone/desktop)
 - [ ] GitHub webhook subscriptions
 - [ ] Web dashboard for log viewing
