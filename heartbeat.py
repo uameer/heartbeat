@@ -184,10 +184,17 @@ Anything worth doing right now?"""
                 log.info(f"[DRY-RUN] Would act: {action}")
                 return None
 
+            confidence = result.get("confidence", 5)
+            if confidence < 6:
+                log.info(
+                    f"[LOW-CONFIDENCE] Would act: {action} "
+                    f"but confidence {confidence}/10 — waiting for clearer signal"
+                )
+                return None
+
             log.info(f"[ACT] {action}")
             learning_key = result.get("learning_key", "observation")
             learning_type = result.get("learning_type", "observation")
-            confidence = result.get("confidence", 5)
             if action:
                 write_learning(
                     type=learning_type,
@@ -198,6 +205,10 @@ Anything worth doing right now?"""
             if memory_update:
                 return memory_update
         else:
+            ambiguous_words = {"unclear", "ambiguous", "unsure", "uncertain", "not sure"}
+            if any(w in reasoning.lower() for w in ambiguous_words):
+                log.info(f"[AMBIGUOUS] {reasoning}")
+                return None
             log.info(f"[WAIT] {reasoning}")
 
     except json.JSONDecodeError:
