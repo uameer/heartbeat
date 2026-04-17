@@ -203,6 +203,136 @@ Anything worth doing right now?"""
     return None
 
 
+# ── Demo ─────────────────────────────────────────────────────────────────────
+
+def run_demo(
+    provider: str = PROVIDER,
+    model: Optional[str] = None,
+    workspace: Optional[Path] = None,
+    profile: str = "generic",
+) -> None:
+    """Run 3 real ticks, print results, write at most one demo learning, then exit."""
+    workspace = workspace or Path.cwd()
+    selected_provider = provider.lower()
+    selected_model = choose_model(selected_provider, model)
+    client = build_client(selected_provider)
+
+    hb_dir = workspace / ".heartbeat"
+    hb_dir.mkdir(parents=True, exist_ok=True)
+    demo_learnings_file = hb_dir / "demo_learnings.jsonl"
+
+    print("heartbeat demo — 3 ticks against current directory")
+    print(f"Using {selected_provider} / {selected_model}")
+    print("─" * 50)
+
+    project_context = read_project_context(None, workspace)
+    signals = collect_signals(workspace, profile)
+
+    act_count = 0
+    wait_count = 0
+    act_entries: list[dict] = []
+
+    for tick_number in range(1, 4):
+        user_message = f"""Tick #{tick_number} — {datetime.datetime.now().isoformat()}
+
+Project context:
+<context>
+{project_context}
+</context>
+
+Persistent memory:
+<memory>
+(empty — demo run)
+</memory>
+
+Collected signals:
+<signals>
+{signals}
+</signals>
+
+Anything worth doing right now?"""
+
+        try:
+            if selected_provider in ("openai", "ollama", "gemini"):
+                response = client.chat.completions.create(
+                    model=selected_model,
+                    max_tokens=500,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_message},
+                    ],
+                )
+                raw = response.choices[0].message.content.strip()
+            else:
+                response = client.messages.create(
+                    model=selected_model,
+                    max_tokens=500,
+                    system=SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": user_message}],
+                )
+                raw = response.content[0].text.strip()
+
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            result = json.loads(raw)
+
+            decision = result.get("decision", "wait")
+            reasoning = result.get("reasoning", "")
+            action = result.get("action_taken", "")
+            confidence = int(result.get("confidence", 5))
+
+            if decision == "act" and confidence < 5:
+                label = "[LOW-CONFIDENCE]"
+                wait_count += 1
+            elif decision == "act":
+                label = "[ACT]"
+                act_count += 1
+                act_entries.append({
+                    "type": result.get("learning_type", "observation"),
+                    "key": result.get("learning_key", "demo-observation"),
+                    "insight": action,
+                    "confidence": confidence,
+                })
+            else:
+                label = "[WAIT]"
+                wait_count += 1
+
+            print(f"Tick #{tick_number}: {label}")
+            print(f"  Reasoning: {reasoning}")
+            if decision == "act" and action:
+                print(f"  Action: {action}")
+
+        except json.JSONDecodeError:
+            print(f"Tick #{tick_number}: [WAIT]")
+            print(f"  Reasoning: (non-JSON response from model)")
+            wait_count += 1
+        except Exception as e:
+            print(f"Tick #{tick_number}: [WAIT]")
+            print(f"  Reasoning: (error: {e})")
+            wait_count += 1
+
+    if act_entries:
+        best = max(act_entries, key=lambda e: e["confidence"])
+        entry = {
+            "ts": datetime.datetime.now().isoformat(),
+            "type": best["type"],
+            "key": best["key"],
+            "insight": best["insight"],
+            "confidence": best["confidence"],
+            "source": "demo",
+        }
+        with open(demo_learnings_file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+
+    print("─" * 50)
+    print("Demo complete.")
+    print(f"Ticks: 3 | Acts: {act_count} | Waits: {wait_count}")
+    print(f"Memory: .heartbeat/demo_learnings.jsonl")
+    print("To run for real: python heartbeat.py")
+
+
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 def read_project_context(context_file: Optional[str], workspace: Path) -> str:
@@ -386,6 +516,10 @@ if __name__ == "__main__":
         help="Print weekly summary from learnings.jsonl and exit"
     )
     parser.add_argument(
+        "--demo", action="store_true",
+        help="Run 3 demo ticks and exit — no loop, separate memory"
+    )
+    parser.add_argument(
         "--save-config", action="store_true",
         help="Save current run defaults to <workspace>/.heartbeat/config.json and exit"
     )
@@ -422,6 +556,19 @@ if __name__ == "__main__":
             config_to_save["model"] = model
         path = write_workspace_config(workspace, config_to_save)
         print(f"Saved config: {path}")
+        exit(0)
+
+    if args.demo:
+        try:
+            run_demo(
+                provider=provider,
+                model=model,
+                workspace=workspace,
+                profile=profile,
+            )
+        except ValueError as e:
+            print(f"Error: {e}")
+            exit(1)
         exit(0)
 
     if args.report:
