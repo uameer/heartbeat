@@ -117,7 +117,6 @@ def tick(
     model: str,
     signals: str,
     system_prompt: str = SYSTEM_PROMPT,
-    dry_run: bool = False,
 ) -> Optional[str]:
     """One heartbeat. Returns a memory update string if the agent acted."""
     user_message = f"""Tick #{tick_number} — {datetime.datetime.now().isoformat()}
@@ -180,21 +179,10 @@ Anything worth doing right now?"""
                 log.info(f"[WAIT] Repeated recent action suppressed: {action}")
                 return None
 
-            if dry_run:
-                log.info(f"[DRY-RUN] Would act: {action}")
-                return None
-
-            confidence = result.get("confidence", 5)
-            if confidence < 6:
-                log.info(
-                    f"[LOW-CONFIDENCE] Would act: {action} "
-                    f"but confidence {confidence}/10 — waiting for clearer signal"
-                )
-                return None
-
             log.info(f"[ACT] {action}")
             learning_key = result.get("learning_key", "observation")
             learning_type = result.get("learning_type", "observation")
+            confidence = result.get("confidence", 5)
             if action:
                 write_learning(
                     type=learning_type,
@@ -205,10 +193,6 @@ Anything worth doing right now?"""
             if memory_update:
                 return memory_update
         else:
-            ambiguous_words = {"unclear", "ambiguous", "unsure", "uncertain", "not sure"}
-            if any(w in reasoning.lower() for w in ambiguous_words):
-                log.info(f"[AMBIGUOUS] {reasoning}")
-                return None
             log.info(f"[WAIT] {reasoning}")
 
     except json.JSONDecodeError:
@@ -217,6 +201,136 @@ Anything worth doing right now?"""
         log.error(f"Tick {tick_number} error: {e}")
 
     return None
+
+
+# ── Demo ─────────────────────────────────────────────────────────────────────
+
+def run_demo(
+    provider: str = PROVIDER,
+    model: Optional[str] = None,
+    workspace: Optional[Path] = None,
+    profile: str = "generic",
+) -> None:
+    """Run 3 real ticks, print results, write at most one demo learning, then exit."""
+    workspace = workspace or Path.cwd()
+    selected_provider = provider.lower()
+    selected_model = choose_model(selected_provider, model)
+    client = build_client(selected_provider)
+
+    hb_dir = workspace / ".heartbeat"
+    hb_dir.mkdir(parents=True, exist_ok=True)
+    demo_learnings_file = hb_dir / "demo_learnings.jsonl"
+
+    print("heartbeat demo — 3 ticks against current directory")
+    print(f"Using {selected_provider} / {selected_model}")
+    print("─" * 50)
+
+    project_context = read_project_context(None, workspace)
+    signals = collect_signals(workspace, profile)
+
+    act_count = 0
+    wait_count = 0
+    act_entries: list[dict] = []
+
+    for tick_number in range(1, 4):
+        user_message = f"""Tick #{tick_number} — {datetime.datetime.now().isoformat()}
+
+Project context:
+<context>
+{project_context}
+</context>
+
+Persistent memory:
+<memory>
+(empty — demo run)
+</memory>
+
+Collected signals:
+<signals>
+{signals}
+</signals>
+
+Anything worth doing right now?"""
+
+        try:
+            if selected_provider in ("openai", "ollama", "gemini"):
+                response = client.chat.completions.create(
+                    model=selected_model,
+                    max_tokens=500,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_message},
+                    ],
+                )
+                raw = response.choices[0].message.content.strip()
+            else:
+                response = client.messages.create(
+                    model=selected_model,
+                    max_tokens=500,
+                    system=SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": user_message}],
+                )
+                raw = response.content[0].text.strip()
+
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            result = json.loads(raw)
+
+            decision = result.get("decision", "wait")
+            reasoning = result.get("reasoning", "")
+            action = result.get("action_taken", "")
+            confidence = int(result.get("confidence", 5))
+
+            if decision == "act" and confidence < 5:
+                label = "[LOW-CONFIDENCE]"
+                wait_count += 1
+            elif decision == "act":
+                label = "[ACT]"
+                act_count += 1
+                act_entries.append({
+                    "type": result.get("learning_type", "observation"),
+                    "key": result.get("learning_key", "demo-observation"),
+                    "insight": action,
+                    "confidence": confidence,
+                })
+            else:
+                label = "[WAIT]"
+                wait_count += 1
+
+            print(f"Tick #{tick_number}: {label}")
+            print(f"  Reasoning: {reasoning}")
+            if decision == "act" and action:
+                print(f"  Action: {action}")
+
+        except json.JSONDecodeError:
+            print(f"Tick #{tick_number}: [WAIT]")
+            print(f"  Reasoning: (non-JSON response from model)")
+            wait_count += 1
+        except Exception as e:
+            print(f"Tick #{tick_number}: [WAIT]")
+            print(f"  Reasoning: (error: {e})")
+            wait_count += 1
+
+    if act_entries:
+        best = max(act_entries, key=lambda e: e["confidence"])
+        entry = {
+            "ts": datetime.datetime.now().isoformat(),
+            "type": best["type"],
+            "key": best["key"],
+            "insight": best["insight"],
+            "confidence": best["confidence"],
+            "source": "demo",
+        }
+        with open(demo_learnings_file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+
+    print("─" * 50)
+    print("Demo complete.")
+    print(f"Ticks: 3 | Acts: {act_count} | Waits: {wait_count}")
+    print(f"Memory: .heartbeat/demo_learnings.jsonl")
+    print("To run for real: python heartbeat.py")
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
@@ -267,7 +381,6 @@ def run(
     profile: str = "generic",
     run_checks: bool = False,
     lean: bool = False,
-    dry_run: bool = False,
 ):
     workspace = workspace or Path.cwd()
     configure_workspace(workspace)
@@ -280,7 +393,6 @@ def run(
     log.info(f"  profile:        {profile}")
     log.info(f"  run_checks:     {run_checks}")
     log.info(f"  lean:           {lean}")
-    log.info(f"  dry_run:        {dry_run}")
 
     project_context = read_project_context(context_file, workspace)
     memory = load_memory()
@@ -310,7 +422,6 @@ def run(
                 selected_model,
                 signals,
                 system_prompt=system_prompt,
-                dry_run=dry_run,
             )
             if update:
                 memory_updates.append(update)
@@ -401,12 +512,12 @@ if __name__ == "__main__":
         help="Use minimal system prompt — only act when something is clearly broken"
     )
     parser.add_argument(
-        "--dry-run", dest="dry_run", action="store_true", default=False,
-        help="Decide without executing — logs what agent would do"
-    )
-    parser.add_argument(
         "--report", action="store_true",
         help="Print weekly summary from learnings.jsonl and exit"
+    )
+    parser.add_argument(
+        "--demo", action="store_true",
+        help="Run 3 demo ticks and exit — no loop, separate memory"
     )
     parser.add_argument(
         "--save-config", action="store_true",
@@ -447,6 +558,19 @@ if __name__ == "__main__":
         print(f"Saved config: {path}")
         exit(0)
 
+    if args.demo:
+        try:
+            run_demo(
+                provider=provider,
+                model=model,
+                workspace=workspace,
+                profile=profile,
+            )
+        except ValueError as e:
+            print(f"Error: {e}")
+            exit(1)
+        exit(0)
+
     if args.report:
         show_report()
         exit(0)
@@ -468,7 +592,6 @@ if __name__ == "__main__":
             profile=profile,
             run_checks=run_checks,
             lean=args.lean,
-            dry_run=args.dry_run,
         )
     except ValueError as e:
         print(f"Error: {e}")
