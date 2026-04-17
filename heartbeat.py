@@ -512,6 +512,10 @@ if __name__ == "__main__":
         help="Use minimal system prompt — only act when something is clearly broken"
     )
     parser.add_argument(
+        "--signals", action="store_true", default=False,
+        help="Scan X for relevant signals and generate digest"
+    )
+    parser.add_argument(
         "--report", action="store_true",
         help="Print weekly summary from learnings.jsonl and exit"
     )
@@ -579,6 +583,12 @@ if __name__ == "__main__":
         exit(0)
     if args.actions or args.actions_json:
         show_actions(limit=max(args.actions_limit, 1), as_json=args.actions_json)
+        exit(0)
+
+    if args.signals:
+        from heartbeat_signals_x import run_signals
+        digest_path = run_signals(workspace, provider=provider, model=model)
+        print(f"Digest written: {digest_path}")
         exit(0)
 
     try:

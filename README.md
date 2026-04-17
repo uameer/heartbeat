@@ -112,11 +112,38 @@ export ANTHROPIC_API_KEY=your_key_here
 
 # Optional context file
 ./scripts/run.sh . --context my_project_context.md
+
+# Scan X/Twitter for relevant signals and generate a digest
+./scripts/run.sh . --signals
 ```
 
 All logs/memory are stored inside the target workspace:
 `.heartbeat/logs/` and `.heartbeat/memory/learnings.jsonl`.
 Workspace defaults are stored in `.heartbeat/config.json`.
+
+## X signals (`--signals`)
+
+Scans X/Twitter for keywords and accounts relevant to heartbeat and writes
+a triage digest categorised by urgency.
+
+```bash
+# One-shot scan — writes .heartbeat/signals/YYYY-MM-DD-HH.md
+./scripts/run.sh . --signals
+
+# Run as a cron job (e.g. every hour)
+0 * * * * cd /path/to/heartbeat && ./scripts/run.sh . --signals
+```
+
+**Customise keywords** — create `.heartbeat/signals/keywords.txt`, one per line.  
+Default keywords: `agent harness`, `KAIROS pattern`, `proactive agent`,
+`agent memory format`, `heartbeat agent`.
+
+**Customise accounts** — create `.heartbeat/signals/accounts.txt`, one username per line.  
+Default accounts: `garrytan`, `hwchase17`, `steipete`, `akshay_pachaar`, `intuitiveml`.
+
+Requires `snscrape` (`pip install snscrape`).  
+Each digest categorises items as **HIGH** (engage within 2 h), **MEDIUM** (read later), or **PARK** (skip),
+and suggests a response angle for HIGH items.
 
 ## Python version
 
@@ -313,6 +340,7 @@ only the client call needs swapping.
 - [x] --lean mode for token-efficient ticks
 - [x] --report weekly summary command
 - [x] --dry-run mode
+- [x] --signals X/Twitter monitoring digest
 - [ ] Push notifications (phone/desktop)
 - [ ] GitHub webhook subscriptions
 - [ ] Web dashboard for log viewing
@@ -327,6 +355,7 @@ The full codebase splits across 4 files:
 - `heartbeat.py` — core loop + CLI (~450 lines)
 - `heartbeat_memory.py` — learning storage
 - `heartbeat_signals.py` — project signal collection
+- `heartbeat_signals_x.py` — X/Twitter signal scanner (`--signals`)
 - `heartbeat_providers.py` — model API clients
 
 heartbeat reads files from your project directory.
